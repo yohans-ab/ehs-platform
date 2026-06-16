@@ -1,0 +1,17 @@
+version: 2
+
+sources:
+  - name: raw
+    schema: raw
+    tables:
+      - name: osha_incidents
+        description: "Raw OSHA establishment-level injury and illness data"
+        columns:
+          - name: establishment_id
+            tests:
+              - not_null
+          - name: survey_year
+            tests:
+              - not_null
+              - accepted_values:
+                  values: [2019, 2020, 2021, 2022, 2023]

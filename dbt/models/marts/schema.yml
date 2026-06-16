@@ -1,0 +1,46 @@
+version: 2
+
+models:
+  - name: fct_incidents
+    description: "Fact table of OSHA incident records with computed TRIR"
+    columns:
+      - name: incident_id
+        description: "Surrogate key: hash of establishment_id + survey_year"
+        tests:
+          - unique
+          - not_null
+      - name: trir
+        description: "Total Recordable Incident Rate — (recordable_cases * 200,000) / hours_worked"
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 200
+      - name: total_deaths
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+      - name: total_recordable_cases
+        tests:
+          - not_null
+          - dbt_utils.accepted_range:
+              min_value: 0
+
+  - name: dim_establishment
+    description: "Establishment dimension — company, location, industry"
+    columns:
+      - name: establishment_id
+        tests:
+          - unique
+          - not_null
+      - name: naics_code
+        tests:
+          - not_null
+
+  - name: dim_time
+    description: "Time dimension with COVID period labels"
+    columns:
+      - name: survey_year
+        tests:
+          - unique
+          - not_null

@@ -1,0 +1,80 @@
+name: EHS Pipeline CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: ehs_user
+          POSTGRES_PASSWORD: ehs_password
+          POSTGRES_DB: ehs_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Lint with flake8
+        run: |
+          pip install flake8
+          flake8 ingestion/ llm/ dashboard/ dags/ --max-line-length=100 --ignore=E501,W503
+
+      - name: Run ingestion
+        env:
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: 5432
+          POSTGRES_DB: ehs_db
+          POSTGRES_USER: ehs_user
+          POSTGRES_PASSWORD: ehs_password
+        run: python ingestion/osha_loader.py
+
+      - name: Run dbt
+        working-directory: dbt
+        env:
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: 5432
+          POSTGRES_DB: ehs_db
+          POSTGRES_USER: ehs_user
+          POSTGRES_PASSWORD: ehs_password
+        run: |
+          dbt deps
+          dbt run --profiles-dir .
+          dbt test --profiles-dir .
+
+      - name: Run Soda quality checks
+        env:
+          POSTGRES_HOST: localhost
+          POSTGRES_PORT: 5432
+          POSTGRES_DB: ehs_db
+          POSTGRES_USER: ehs_user
+          POSTGRES_PASSWORD: ehs_password
+        run: soda scan -d ehs_db -c quality/soda_config.yml quality/checks.yml

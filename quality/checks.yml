@@ -1,0 +1,48 @@
+checks for raw.osha_incidents:
+  # Volume check — at least 10k rows expected
+  - row_count > 10000:
+      name: "Raw table has sufficient rows"
+
+  # No nulls on critical fields
+  - missing_count(establishment_name) = 0:
+      name: "No null establishment names"
+
+  - missing_count(survey_year) = 0:
+      name: "No null survey years"
+
+  # Valid year range
+  - invalid_count(survey_year) = 0:
+      valid min: 2019
+      valid max: 2023
+      name: "Survey years in valid range"
+
+checks for analytics_staging.stg_osha_incidents:
+  # TRIR sanity — no negative values
+  - invalid_count(trir) = 0:
+      valid min: 0
+      name: "TRIR is non-negative"
+
+  # Total deaths never negative
+  - min(total_deaths) >= 0:
+      name: "Total deaths non-negative"
+
+  # At least 80% of rows have TRIR (hours_worked available)
+  - missing_percent(trir) < 20:
+      name: "TRIR coverage above 80%"
+
+checks for analytics_marts.fct_incidents:
+  # No duplicate incident IDs
+  - duplicate_count(incident_id) = 0:
+      name: "Incident IDs are unique"
+
+  # Row count matches staging (no data loss in transformation)
+  - row_count same as analytics_staging.stg_osha_incidents:
+      name: "No rows lost in mart transformation"
+
+  # TRIR max sanity check
+  - max(trir) < 200:
+      name: "TRIR has no extreme outliers"
+
+  # Deaths are always non-negative integers
+  - min(total_deaths) >= 0:
+      name: "Total deaths non-negative in fact table"

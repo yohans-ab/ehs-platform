@@ -1,0 +1,12 @@
+ehs_dbt:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: "{{ env_var('POSTGRES_HOST', 'localhost') }}"
+      port: 5432
+      user: "{{ env_var('POSTGRES_USER', 'ehs_user') }}"
+      password: "{{ env_var('POSTGRES_PASSWORD', 'ehs_password') }}"
+      dbname: "{{ env_var('POSTGRES_DB', 'ehs_db') }}"
+      schema: analytics
+      threads: 4
