@@ -14,11 +14,11 @@ cleaned AS (
         -- Location
         UPPER(TRIM(city))           AS city,
         UPPER(TRIM(state))          AS state,
-        NULLIF(TRIM(zip), '')       AS zip_code,
+        NULLIF(TRIM(CAST(zip_code AS VARCHAR)), '')  AS zip_code,
 
         -- Industry
-        CAST(naics_code AS VARCHAR) AS naics_code,
-        TRIM(naics_description)     AS naics_description,
+        CAST(naics_code AS VARCHAR)     AS naics_code,
+        TRIM(industry_description)      AS naics_description,
 
         -- Workforce
         NULLIF(annual_average_employees, 0) AS avg_employees,
@@ -39,13 +39,15 @@ cleaned AS (
         CASE
             WHEN total_hours_worked > 0
             THEN ROUND(
-                (
-                    (
-                        COALESCE(total_dafw_cases, 0)
-                        + COALESCE(total_djtr_cases, 0)
-                        + COALESCE(total_other_cases, 0)
-                    ) * 200000.0
-                ) / total_hours_worked,
+                CAST(
+                    (dbt
+                        (
+                            COALESCE(total_dafw_cases, 0)
+                            + COALESCE(total_djtr_cases, 0)
+                            + COALESCE(total_other_cases, 0)
+                        ) * 200000.0
+                    ) / total_hours_worked
+                AS NUMERIC),
                 2
             )
             ELSE NULL

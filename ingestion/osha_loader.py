@@ -1,5 +1,6 @@
+import io
 import os
-from io import StringIO
+import zipfile
 
 import pandas as pd
 import requests
@@ -12,10 +13,13 @@ load_dotenv()
 # Years of data to pull
 YEARS = [2019, 2020, 2021, 2022, 2023]
 
-# OSHA direct download URLs (CSV format)
+# OSHA updated their URLs to ZIP archives (old direct CSV links are broken)
 OSHA_URLS = {
-    year: f"https://www.osha.gov/sites/default/files/ITA_data_{year}.csv"
-    for year in YEARS
+    2019: "https://www.osha.gov/sites/default/files/ITA%20Data%20CY%202019.zip",
+    2020: "https://www.osha.gov/sites/default/files/ITA-Data-CY-2020.zip",
+    2021: "https://www.osha.gov/sites/default/files/ITA-data-cy2021.zip",
+    2022: "https://www.osha.gov/sites/default/files/ITA-data-cy2022.zip",
+    2023: "https://www.osha.gov/sites/default/files/ITA_300A_Summary_Data_2023_through_12-31-2024.zip",
 }
 
 
@@ -31,10 +35,17 @@ def get_engine():
 def download_osha_data(year: int) -> pd.DataFrame:
     logger.info(f"Downloading OSHA data for {year}")
     url = OSHA_URLS[year]
-    response = requests.get(url, timeout=120)
+    response = requests.get(url, timeout=300)
     response.raise_for_status()
 
-    df = pd.read_csv(StringIO(response.text), low_memory=False)
+    # OSHA now serves ZIP archives — extract the first CSV inside
+    with zipfile.ZipFile(io.BytesIO(response.content)) as zf:
+        csv_files = [f for f in zf.namelist() if f.lower().endswith(".csv")]
+        if not csv_files:
+            raise ValueError(f"No CSV found in ZIP for {year}: {zf.namelist()}")
+        with zf.open(csv_files[0]) as f:
+            df = pd.read_csv(f, low_memory=False)
+
     df["survey_year"] = year
     logger.info(f"Downloaded {len(df):,} rows for {year}")
     return df
@@ -62,7 +73,7 @@ def clean_dataframe(df: pd.DataFrame) -> pd.DataFrame:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
     # Drop rows with no establishment name
-    df = df.dropna(subset=["establishment_name"])
+    df = df.dropna(subset=["establishment_name"]).copy()
 
     # Strip whitespace from string columns
     str_cols = ["establishment_name", "city", "state", "naics_description"]

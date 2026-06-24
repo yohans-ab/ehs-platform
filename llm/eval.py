@@ -15,8 +15,8 @@ from collections import defaultdict
 
 from classifier import classify_incident, get_engine
 from dotenv import load_dotenv
+import anthropic
 import instructor
-import openai
 import os
 import pandas as pd
 from loguru import logger
@@ -41,7 +41,7 @@ def run_eval():
         return
 
     engine = get_engine()
-    client = instructor.from_openai(openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY")))
+    client = instructor.from_anthropic(anthropic.Anthropic(api_key=os.getenv("CLAUDE_API_KEY")))
 
     ids = [row[0] for row in GROUND_TRUTH]
     placeholders = ", ".join(f"'{i}'" for i in ids)

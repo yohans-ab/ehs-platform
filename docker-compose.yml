@@ -9,7 +9,7 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth'
-    _PIP_ADDITIONAL_REQUIREMENTS: 'pandas sqlalchemy psycopg2-binary requests openai instructor soda-core-postgres dbt-core dbt-postgres python-dotenv loguru'
+    _PIP_ADDITIONAL_REQUIREMENTS: 'pandas sqlalchemy psycopg2-binary requests anthropic instructor soda-core-postgres dbt-core dbt-postgres python-dotenv loguru'
   env_file:
     - .env
   volumes:
@@ -58,6 +58,25 @@ services:
   airflow-scheduler:
     <<: *airflow-common
     command: scheduler
+    restart: always
+
+  dashboard:
+    image: python:3.11-slim
+    working_dir: /app
+    command: >
+      bash -c "pip install streamlit plotly pandas sqlalchemy psycopg2-binary python-dotenv --quiet &&
+               streamlit run dashboard/app.py --server.port=8501 --server.address=0.0.0.0 --browser.serverAddress=localhost"
+    volumes:
+      - .:/app
+    ports:
+      - "8501:8501"
+    env_file:
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: always
 
 volumes:

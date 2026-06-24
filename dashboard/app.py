@@ -23,7 +23,8 @@ st.set_page_config(
 def get_engine():
     return create_engine(
         f"postgresql+psycopg2://{os.getenv('POSTGRES_USER')}:{os.getenv('POSTGRES_PASSWORD')}"
-        f"@{os.getenv('POSTGRES_HOST')}:{os.getenv('POSTGRES_PORT')}/{os.getenv('POSTGRES_DB')}"
+        f"@{os.getenv('POSTGRES_HOST')}:{os.getenv('POSTGRES_PORT')}/{os.getenv('POSTGRES_DB')}",
+        connect_args={"connect_timeout": 5},
     )
 
 
@@ -52,7 +53,7 @@ def load_data() -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Load + filter
+# Load data
 # ---------------------------------------------------------------------------
 
 try:
@@ -62,13 +63,24 @@ except Exception as e:
     st.info("Make sure Postgres is running and your .env is configured.")
     st.stop()
 
-# ── Header ──────────────────────────────────────────────────────────────────
-st.title("🦺 EHS&S Incident Intelligence Platform")
-st.caption("Powered by OSHA public data · dbt · GPT-4o-mini · Soda")
 
-# ── Sidebar Filters ──────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Header
+# ---------------------------------------------------------------------------
+
+st.title("🦺 EHS&S Incident Intelligence Platform")
+st.caption("Powered by OSHA public data · dbt · Claude Haiku · Soda")
+
+# ---------------------------------------------------------------------------
+# Sidebar Filters
+# ---------------------------------------------------------------------------
+
 with st.sidebar:
     st.header("Filters")
+    if st.button("🔄 Refresh Data"):
+        st.cache_data.clear()
+        st.rerun()
+
     years = st.multiselect(
         "Year",
         sorted(df["survey_year"].unique()),
@@ -83,7 +95,7 @@ with st.sidebar:
         sorted(df["naics_description"].dropna().unique()),
     )
 
-filtered = df[df["survey_year"].isin(years)]
+filtered = df[df["survey_year"].isin(years)] if years else df
 if states:
     filtered = filtered[filtered["est_state"].isin(states)]
 if severity_filter:
@@ -91,43 +103,50 @@ if severity_filter:
 if naics_filter:
     filtered = filtered[filtered["naics_description"].isin(naics_filter)]
 
-# ── KPI Row ──────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# KPI Row
+# ---------------------------------------------------------------------------
+
 col1, col2, col3, col4, col5 = st.columns(5)
 col1.metric("Establishments", f"{filtered['establishment_id'].nunique():,}")
 col2.metric("Total Deaths", f"{int(filtered['total_deaths'].sum()):,}")
 col3.metric("Recordable Cases", f"{int(filtered['total_recordable_cases'].sum()):,}")
-col4.metric("Avg TRIR", f"{filtered['trir'].mean():.2f}")
+trir_mean = filtered['trir'].mean()
+col4.metric("Avg TRIR", f"{trir_mean:.2f}" if pd.notna(trir_mean) else "N/A")
 classified_pct = filtered["severity"].notna().mean()
 col5.metric("LLM Classified", f"{classified_pct:.0%}")
 
 st.divider()
 
-# ── TRIR Trend ───────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# TRIR Trend
+# ---------------------------------------------------------------------------
+
 st.subheader("📈 TRIR Trend by Year")
 trir_trend = (
-    filtered.groupby(["survey_year", "period_label"])["trir"]
+    filtered.groupby("survey_year")["trir"]
     .mean()
     .reset_index()
     .rename(columns={"trir": "avg_trir"})
 )
-fig_trend = px.line(
-    trir_trend,
-    x="survey_year",
-    y="avg_trir",
-    markers=True,
-    color="period_label",
-    labels={"survey_year": "Year", "avg_trir": "Average TRIR", "period_label": "Period"},
-    color_discrete_map={
-        "Pre-COVID": "#2563EB",
-        "COVID-19 Year": "#DC2626",
-        "Post-COVID": "#16A34A",
-    },
-)
-st.plotly_chart(fig_trend, use_container_width=True)
+if not trir_trend.empty:
+    fig_trend = px.line(
+        trir_trend,
+        x="survey_year",
+        y="avg_trir",
+        markers=True,
+        labels={"survey_year": "Year", "avg_trir": "Average TRIR"},
+    )
+    st.plotly_chart(fig_trend, use_container_width=True)
+else:
+    st.info("No data available for the selected filters.")
 
 st.divider()
 
-# ── LLM Analysis ─────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# LLM Analysis
+# ---------------------------------------------------------------------------
+
 classified = filtered.dropna(subset=["root_cause_category"])
 
 col_left, col_right = st.columns(2)
@@ -169,10 +188,15 @@ with col_right:
             },
         )
         st.plotly_chart(fig_sev, use_container_width=True)
+    else:
+        st.info("No classified data available.")
 
 st.divider()
 
-# ── Top States by TRIR ────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Top States by TRIR
+# ---------------------------------------------------------------------------
+
 st.subheader("🗺️ Top 15 States by Average TRIR")
 state_trir = (
     filtered.groupby("est_state")["trir"]
@@ -182,20 +206,26 @@ state_trir = (
     .sort_values("avg_trir", ascending=False)
     .head(15)
 )
-fig_states = px.bar(
-    state_trir,
-    x="state",
-    y="avg_trir",
-    color="avg_trir",
-    color_continuous_scale="OrRd",
-    labels={"state": "State", "avg_trir": "Average TRIR"},
-)
-fig_states.update_layout(coloraxis_showscale=False)
-st.plotly_chart(fig_states, use_container_width=True)
+if not state_trir.empty:
+    fig_states = px.bar(
+        state_trir,
+        x="state",
+        y="avg_trir",
+        color="avg_trir",
+        color_continuous_scale="OrRd",
+        labels={"state": "State", "avg_trir": "Average TRIR"},
+    )
+    fig_states.update_layout(coloraxis_showscale=False)
+    st.plotly_chart(fig_states, use_container_width=True)
+else:
+    st.info("No state data available for the selected filters.")
 
 st.divider()
 
-# ── Incident Table with Prevention Actions ────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Incident Table
+# ---------------------------------------------------------------------------
+
 st.subheader("📋 Top Incidents with LLM Prevention Actions")
 table_cols = [
     "establishment_name",
@@ -224,8 +254,11 @@ if top.empty:
 else:
     st.dataframe(top, use_container_width=True, hide_index=True)
 
-# ── Footer ────────────────────────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# Footer
+# ---------------------------------------------------------------------------
+
 st.caption(
     "Data: OSHA ITA public dataset (2019–2023) · "
-    "Transformations: dbt · Quality: soda.io · LLM: GPT-4o-mini via instructor"
+    "Transformations: dbt · Quality: soda.io · LLM: Claude Haiku via instructor"
 )
