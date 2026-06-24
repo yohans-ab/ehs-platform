@@ -1,4 +1,5 @@
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Literal
 
 import anthropic
@@ -8,6 +9,7 @@ from dotenv import load_dotenv
 from loguru import logger
 from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, text
+from tqdm import tqdm
 
 load_dotenv()
 
@@ -79,11 +81,11 @@ Classify the severity, identify the most likely root cause, and provide 3 specif
 # ---------------------------------------------------------------------------
 
 def classify_incident(client, row: dict) -> dict:
-    result: IncidentClassification = client.chat.completions.create(
-        model="gpt-4o-mini",
+    result: IncidentClassification = client.messages.create(
+        model="claude-haiku-4-5-20251001",
         response_model=IncidentClassification,
         messages=[{"role": "user", "content": build_prompt(row)}],
-        temperature=0.2,
+        max_tokens=1024,
     )
     return {
         "incident_id": row["incident_id"],
@@ -107,14 +109,13 @@ def get_engine():
 # Main runner
 # ---------------------------------------------------------------------------
 
-def run_classification(limit: int = 500):
+def run_classification(limit: int = 500, workers: int = 10):
     """
-    Classify unprocessed incidents using GPT-4o-mini.
-    Defaults to 500 rows to keep API costs predictable.
-    Increase limit (or set to None) for full runs.
+    Classify unprocessed incidents using Claude Haiku.
+    Runs concurrently with 10 workers for speed.
     """
     engine = get_engine()
-    client = instructor.from_openai(openai.OpenAI(api_key=os.getenv("CLAUDE_API_KEY ")))
+    client = instructor.from_anthropic(anthropic.Anthropic(api_key=os.getenv("CLAUDE_API_KEY")))
 
     # Ensure classification table exists
     with engine.connect() as conn:
@@ -149,30 +150,42 @@ def run_classification(limit: int = 500):
         LIMIT :limit
     """
     df = pd.read_sql(text(query), engine, params={"limit": limit})
-    logger.info(f"Classifying {len(df)} incidents")
+    logger.info(f"Classifying {len(df)} incidents with {workers} workers...")
 
+    rows = [row.to_dict() for _, row in df.iterrows()]
     results = []
-    for _, row in df.iterrows():
-        try:
-            classification = classify_incident(client, row.to_dict())
-            results.append(classification)
-        except Exception as e:
-            logger.warning(f"Failed to classify {row['incident_id']}: {e}")
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(classify_incident, client, row): row for row in rows}
+        with tqdm(total=len(futures), desc="Classifying", unit="incident") as pbar:
+            for future in as_completed(futures):
+                try:
+                    results.append(future.result())
+                except Exception as e:
+                    logger.warning(f"Failed: {e}")
+                finally:
+                    pbar.update(1)
 
     if results:
-        results_df = pd.DataFrame(results)
-        results_df.to_sql(
-            "llm_classifications",
-            schema="analytics_marts",
-            con=engine,
-            if_exists="append",
-            index=False,
-            method="multi",
-        )
-        logger.success(f"Classified and stored {len(results)} incidents")
+        results_df = pd.DataFrame(results).drop_duplicates(subset=["incident_id"])
+        with engine.connect() as conn:
+            for _, row in results_df.iterrows():
+                conn.execute(text("""
+                    INSERT INTO analytics_marts.llm_classifications
+                        (incident_id, severity, root_cause_category,
+                         prevention_action_1, prevention_action_2, prevention_action_3,
+                         confidence_score)
+                    VALUES
+                        (:incident_id, :severity, :root_cause_category,
+                         :prevention_action_1, :prevention_action_2, :prevention_action_3,
+                         :confidence_score)
+                    ON CONFLICT (incident_id) DO NOTHING
+                """), row.to_dict())
+            conn.commit()
+        logger.success(f"Classified and stored {len(results_df)} incidents")
     else:
         logger.warning("No incidents classified — check data availability.")
 
 
 if __name__ == "__main__":
-    run_classification()
+    run_classification(limit=500)
